@@ -150,13 +150,19 @@ impl HashDomain {
     #[allow(non_snake_case)]
     fn hash_to_point_inner(&self, msg: impl Iterator<Item = bool>) -> IncompletePoint {
         let padded: Vec<_> = Pad::new(msg).collect();
+        #[cfg(feature = "computed-generators")]
+        let hasher = pallas::Point::hash_to_curve(S_PERSONALIZATION);
 
         padded
             .chunks(K)
             .fold(IncompletePoint::from(self.Q), |acc, chunk| {
-                let (S_x, S_y) =
-                    SINSEMILLA_S[lebs2ip_k(chunk.try_into().expect("correct length")) as usize];
+                let index = lebs2ip_k(chunk.try_into().expect("correct length"));
+                #[cfg(not(feature = "computed-generators"))]
+                let (S_x, S_y) = SINSEMILLA_S[index as usize];
+                #[cfg(not(feature = "computed-generators"))]
                 let S_chunk = pallas::Affine::from_xy(S_x, S_y).unwrap();
+                #[cfg(feature = "computed-generators")]
+                let S_chunk = IncompletePoint::from(hasher(&index.to_le_bytes()));
                 (acc + S_chunk) + acc
             })
     }
@@ -317,6 +323,49 @@ mod tests {
             };
             let actual = SINSEMILLA_S[j as usize];
             assert_eq!(computed, actual);
+        }
+    }
+
+    #[cfg(feature = "computed-generators")]
+    #[test]
+    fn computed_generators() {
+        use super::{lebs2ip_k, HashDomain, IncompletePoint, SINSEMILLA_S};
+        use pasta_curves::arithmetic::CurveAffine;
+
+        let domain = HashDomain::new("z.cash:Sinsemilla-computed-generators-test");
+
+        for j in 0..(1u32 << K) {
+            let msg = (0..K).map(|i| (j & (1 << i)) != 0);
+            let actual: Option<pallas::Point> = domain.hash_to_point(msg).into();
+
+            let (s_x, s_y) = SINSEMILLA_S[j as usize];
+            let s = pallas::Affine::from_xy(s_x, s_y).unwrap();
+            let q = IncompletePoint::from(domain.Q);
+            let expected: subtle::CtOption<pallas::Point> = ((q + s) + q).into();
+
+            assert_eq!(actual, expected.into());
+        }
+
+        for msg in [
+            vec![],
+            vec![true],
+            vec![
+                true, false, true, true, false, false, true, false, true, false, true,
+            ],
+        ] {
+            let actual: Option<pallas::Point> = domain.hash_to_point(msg.iter().copied()).into();
+            let padded: Vec<_> = Pad::new(msg.into_iter()).collect();
+            let expected: subtle::CtOption<pallas::Point> = padded
+                .chunks(K)
+                .fold(IncompletePoint::from(domain.Q), |acc, chunk| {
+                    let index = lebs2ip_k(chunk.try_into().expect("correct length"));
+                    let (s_x, s_y) = SINSEMILLA_S[index as usize];
+                    let s = pallas::Affine::from_xy(s_x, s_y).unwrap();
+                    (acc + s) + acc
+                })
+                .into();
+
+            assert_eq!(actual, expected.into());
         }
     }
 }
