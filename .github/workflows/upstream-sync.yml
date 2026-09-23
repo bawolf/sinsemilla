@@ -119,11 +119,12 @@ jobs:
           ref: ${{ env.OUR_BRANCH }}
           fetch-depth: 0
 
-      - name: Install Rust (stable, plus the firmware's pinned nightly)
+      - name: Install Rust (rust-toolchain.toml, plus the firmware's pinned nightly)
         run: |
           set -euo pipefail
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+          # Upstream pins its toolchain in rust-toolchain.toml; with no argument
+          # rustup installs that one (and its listed rustfmt/clippy components).
+          rustup toolchain install
           rustup toolchain install "$PINNED_NIGHTLY" --profile minimal --target "$NOSTD_TARGET"
           rustc --version
           rustc "+$PINNED_NIGHTLY" --version
@@ -205,10 +206,12 @@ jobs:
           }
 
           # Every gate below was verified green locally at 6ca88ff -- the SHA the
-          # firmware pins -- on 2026-09-22. Only add a gate here after it passes
-          # at HEAD, so a red run always means "upstream broke us", never "this
-          # gate was already broken".
+          # firmware pins -- on 2026-09-22, except clippy, which went green on
+          # 2026-09-23 once upstream c352852 (SINSEMILLA_S as a `static`) merged
+          # in. Only add a gate here after it passes at HEAD, so a red run always
+          # means "upstream broke us", never "this gate was already broken".
           run_gate "fmt"  cargo fmt --check
+          run_gate "clippy" cargo clippy --all-targets --all-features -- -D warnings
           run_gate "test" cargo test
           # Production firmware links the computed generators (the small-flash lever).
           run_gate "test:$OUR_FEATURE" cargo test --features "$OUR_FEATURE"
@@ -229,19 +232,6 @@ jobs:
             echo "STAGE=gate failure after a clean merge" >> "$GITHUB_ENV"
             exit 1
           fi
-
-      # Advisory, NOT blocking -- on purpose.
-      # `cargo clippy --all-targets --all-features -- -D warnings` FAILS at
-      # 6ca88ff with clippy::large_const_arrays on src/sinsemilla_s.rs:7
-      # (SINSEMILLA_S is a `const`, should be a `static`). That is inherited
-      # upstream code and upstream already fixed it in c352852 "Define the
-      # Sinsemilla S table as a static rather than a const". Once that commit
-      # merges in here, move this into the blocking gate matrix above and delete
-      # `continue-on-error`.
-      - name: Clippy (advisory until upstream c352852 lands here)
-        if: steps.merge.outputs.merged == 'yes'
-        continue-on-error: true
-        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Push the merge to our branch
         if: steps.merge.outputs.merged == 'yes'
