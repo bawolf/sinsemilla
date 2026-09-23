@@ -7,11 +7,18 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 ### Added
+- `sinsemilla::CommitDomain::new_with_separate_domains`
 - `computed-generators` feature (off by default). When enabled, `HashDomain::hash_to_point`
   computes each generator `S_j` from its defining hash-to-curve construction instead of
-  reading the precomputed coordinate table. The public `SINSEMILLA_S` constant remains
+  reading the precomputed coordinate table. The public `SINSEMILLA_S` table remains
   exported; the feature is API-additive but selects a slower internal path for every user
   of the crate in that build.
+
+### Changed
+- MSRV is now 1.88.
+- Migrated to `ff 0.14` and `group 0.14`.
+- `sinsemilla::SINSEMILLA_S` is now a `static` instead of a `const`. It can no
+  longer be used in a const context.
 
 ## [0.1.0] - 2024-12-13
 Initial release, extracted from `halo2_gadgets 0.3.0`. Includes minor changes
