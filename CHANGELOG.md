@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 ### Added
+- `HashDomain::hash_to_point_with_progress`, `CommitDomain::commit_with_progress` and
+  `CommitDomain::short_commit_with_progress`, which call a progress callback after each
+  `K`-bit piece of the message, for callers on slow devices that must report progress
+  while a hash runs (with `computed-generators`, each piece is a hash-to-curve). The
+  results are unchanged.
 - `computed-generators` feature (off by default). When enabled, `HashDomain::hash_to_point`
   computes each generator `S_j` from its defining hash-to-curve construction instead of
   reading the precomputed coordinate table. The public `SINSEMILLA_S` constant remains

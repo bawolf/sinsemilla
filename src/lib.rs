@@ -144,11 +144,27 @@ impl HashDomain {
     ///
     /// [concretesinsemillahash]: https://zips.z.cash/protocol/nu5.pdf#concretesinsemillahash
     pub fn hash_to_point(&self, msg: impl Iterator<Item = bool>) -> CtOption<pallas::Point> {
-        self.hash_to_point_inner(msg).into()
+        self.hash_to_point_with_progress(msg, &mut || {})
+    }
+
+    /// [`HashDomain::hash_to_point`], calling `progress` after each [`K`]-bit piece of
+    /// the message, for a caller on a slow device that must report progress while it
+    /// runs. With `computed-generators` each piece is a hash-to-curve, so one
+    /// NoteCommit takes ~0.7 s on a Cortex-M33.
+    pub fn hash_to_point_with_progress(
+        &self,
+        msg: impl Iterator<Item = bool>,
+        progress: &mut dyn FnMut(),
+    ) -> CtOption<pallas::Point> {
+        self.hash_to_point_inner(msg, progress).into()
     }
 
     #[allow(non_snake_case)]
-    fn hash_to_point_inner(&self, msg: impl Iterator<Item = bool>) -> IncompletePoint {
+    fn hash_to_point_inner(
+        &self,
+        msg: impl Iterator<Item = bool>,
+        progress: &mut dyn FnMut(),
+    ) -> IncompletePoint {
         let padded: Vec<_> = Pad::new(msg).collect();
         #[cfg(feature = "computed-generators")]
         let hasher = pallas::Point::hash_to_curve(S_PERSONALIZATION);
@@ -163,7 +179,9 @@ impl HashDomain {
                 let S_chunk = pallas::Affine::from_xy(S_x, S_y).unwrap();
                 #[cfg(feature = "computed-generators")]
                 let S_chunk = IncompletePoint::from(hasher(&index.to_le_bytes()));
-                (acc + S_chunk) + acc
+                let acc = (acc + S_chunk) + acc;
+                progress();
+                acc
             })
     }
 
@@ -227,8 +245,19 @@ impl CommitDomain {
         msg: impl Iterator<Item = bool>,
         r: &pallas::Scalar,
     ) -> CtOption<pallas::Point> {
+        self.commit_with_progress(msg, r, &mut || {})
+    }
+
+    /// [`CommitDomain::commit`], calling `progress` as
+    /// [`HashDomain::hash_to_point_with_progress`] does.
+    pub fn commit_with_progress(
+        &self,
+        msg: impl Iterator<Item = bool>,
+        r: &pallas::Scalar,
+        progress: &mut dyn FnMut(),
+    ) -> CtOption<pallas::Point> {
         // We use complete addition for the blinding factor.
-        CtOption::<pallas::Point>::from(self.M.hash_to_point_inner(msg))
+        CtOption::<pallas::Point>::from(self.M.hash_to_point_inner(msg, progress))
             .map(|p| p + Wnaf::new().scalar(r).base(self.R))
     }
 
@@ -240,7 +269,18 @@ impl CommitDomain {
         msg: impl Iterator<Item = bool>,
         r: &pallas::Scalar,
     ) -> CtOption<pallas::Base> {
-        extract_p_bottom(self.commit(msg, r))
+        self.short_commit_with_progress(msg, r, &mut || {})
+    }
+
+    /// [`CommitDomain::short_commit`], calling `progress` as
+    /// [`HashDomain::hash_to_point_with_progress`] does.
+    pub fn short_commit_with_progress(
+        &self,
+        msg: impl Iterator<Item = bool>,
+        r: &pallas::Scalar,
+        progress: &mut dyn FnMut(),
+    ) -> CtOption<pallas::Base> {
+        extract_p_bottom(self.commit_with_progress(msg, r, progress))
     }
 
     /// Returns the Sinsemilla $R$ constant for this domain.
@@ -305,6 +345,34 @@ mod tests {
                 true, true, false, true, false, true, false, true, false, true, true, false, false,
                 false, false, false, false, false, false, false
             ]
+        );
+    }
+
+    #[test]
+    fn progress_is_reported_after_each_piece() {
+        use super::{CommitDomain, HashDomain};
+
+        // 21 bits: two full pieces and a padded third.
+        let msg = [true, false, true].repeat(7);
+        let hash = HashDomain::new("z.cash:test-progress");
+        let mut calls = 0;
+        let with_progress =
+            hash.hash_to_point_with_progress(msg.iter().copied(), &mut || calls += 1);
+        assert_eq!(calls, 3);
+        assert_eq!(
+            Option::<pallas::Point>::from(with_progress),
+            Option::from(hash.hash_to_point(msg.iter().copied())),
+        );
+
+        let commit = CommitDomain::new("z.cash:test-progress");
+        let r = pallas::Scalar::from(7);
+        let mut calls = 0;
+        let with_progress =
+            commit.short_commit_with_progress(msg.iter().copied(), &r, &mut || calls += 1);
+        assert_eq!(calls, 3);
+        assert_eq!(
+            Option::<pallas::Base>::from(with_progress),
+            Option::from(commit.short_commit(msg.iter().copied(), &r)),
         );
     }
 
